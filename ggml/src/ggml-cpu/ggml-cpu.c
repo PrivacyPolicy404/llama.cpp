@@ -1546,6 +1546,39 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
 
     float tmp[16];
 
+#if defined(__AVX2__)
+    // Q2_0: rearrange each column of the block once (ggml_q2_0_prep_q8_0), then reuse it for every row
+    enum { Q2_0_PREP_MAX_BLOCKS = 64 }; // rows of up to 4096 weights
+    if (type == GGML_TYPE_Q2_0 && vec_dot_type == GGML_TYPE_Q8_0 && ne00 % QK2_0 == 0 && ne00 / QK2_0 <= Q2_0_PREP_MAX_BLOCKS) {
+        static _Alignas(32) _Thread_local uint8_t prep[16][Q2_0_PREP_MAX_BLOCKS * GGML_Q2_0_PREP_BLOCK_SIZE];
+        float * dst_cols[16];
+        for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
+            const int64_t n_cols = MIN(iir1 + blck_1, ir1_end) - iir1;
+            for (int64_t c = 0; c < n_cols; ++c) {
+                struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, iir1 + c);
+                const int64_t i11 = row_mapping.i1 % ne11;
+                const int64_t i12 = row_mapping.i2;
+                const char * src1_col = (const char *) wdata +
+                    (src1_cont || src1->type != vec_dot_type
+                    ? (i11      + i12*ne11)*row_size
+                    : (i11*nb11 + i12*nb12));
+                dst_cols[c] = (float *) ((char *) dst->data + (row_mapping.i1*nb1 + i12*nb2));
+                ggml_q2_0_prep_q8_0(ne00, src1_col, prep[c]);
+            }
+            for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
+                const int64_t ir0_last = MIN(iir0 + blck_0, ir0_end);
+                for (int64_t c = 0; c < n_cols; ++c) {
+                    for (int64_t ir0 = iir0; ir0 < ir0_last; ++ir0) {
+                        ggml_vec_dot_q2_0_prep(ne00, &tmp[ir0 - iir0], src0_cur + ir0*nb01, prep[c]);
+                    }
+                    memcpy(&dst_cols[c][iir0], tmp, (ir0_last - iir0)*sizeof(float));
+                }
+            }
+        }
+        return;
+    }
+#endif
+
     for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
         for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
             for (int64_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ++ir1) {
