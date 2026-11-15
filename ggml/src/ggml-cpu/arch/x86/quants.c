@@ -731,6 +731,91 @@ static inline __m256 q2_0_acc_block_avx2(const block_q2_0 * x, const block_q8_0 
 }
 #endif
 
+#if defined(__AVX2__)
+// Q2_0 with the Q8_0 activations rearranged once per column, then reused for every row of the matrix.
+// Byte b of a Q2_0 block holds weights 4b..4b+3, so (qs >> 2k) & 3 gives plane k (byte b = weight 4b + k).
+// With y rearranged the same way, unpacking 32 weights is one variable shift and one AND (the current kernel
+// needs a widening load, two shifts, two ORs and an AND), and sum(y) and the Q8_0 scales are computed once per
+// column instead of once per row. Per Q2_0 block the prepared data is (GGML_Q2_0_PREP_BLOCK_SIZE bytes):
+//   yA = [plane 0 | plane 1], yB = [plane 2 | plane 3] of y (int8)
+//   sy = per 32-bit lane sums of y matching yA + yB, to apply the -1 offset of Q2_0 (sum((v - 1) y) = sum(v y) - sum(y))
+//   dy = Q8_0 scale per 32-bit lane (bytes 0-7 of each plane come from the first Q8_0 block, 8-15 from the second)
+#ifndef GGML_Q2_0_PREFETCH
+#define GGML_Q2_0_PREFETCH 1024
+#endif
+typedef struct {
+    __m256i yA, yB, sy;
+    __m256  dy;
+} q2_0_prep_t;
+static_assert(sizeof(q2_0_prep_t) == GGML_Q2_0_PREP_BLOCK_SIZE, "wrong q2_0 prep size");
+
+void ggml_q2_0_prep_q8_0(int n, const void * GGML_RESTRICT vy, void * GGML_RESTRICT vpy) {
+    const block_q8_0 * GGML_RESTRICT y = vy;
+    q2_0_prep_t * GGML_RESTRICT py = vpy;
+    const int nb = n / QK2_0;
+    // within each 16-byte chunk, gather the bytes of plane k into 32-bit word k
+    const __m128i shuf = _mm_setr_epi8(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+    const __m256i ones8  = _mm256_set1_epi8(1);
+    const __m256i ones16 = _mm256_set1_epi16(1);
+    for (int i = 0; i < nb; i++) {
+        const block_q8_0 * y0 = &y[2*i + 0];
+        const block_q8_0 * y1 = &y[2*i + 1];
+        const __m128i r0 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *) (y0->qs +  0)), shuf);
+        const __m128i r1 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *) (y0->qs + 16)), shuf);
+        const __m128i r2 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *) (y1->qs +  0)), shuf);
+        const __m128i r3 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *) (y1->qs + 16)), shuf);
+        // 4x4 transpose of 32-bit words: plane k = word k of r0..r3
+        const __m128i t0 = _mm_unpacklo_epi32(r0, r1);
+        const __m128i t1 = _mm_unpacklo_epi32(r2, r3);
+        const __m128i t2 = _mm_unpackhi_epi32(r0, r1);
+        const __m128i t3 = _mm_unpackhi_epi32(r2, r3);
+        const __m256i yA = MM256_SET_M128I(_mm_unpackhi_epi64(t0, t1), _mm_unpacklo_epi64(t0, t1));
+        const __m256i yB = MM256_SET_M128I(_mm_unpackhi_epi64(t2, t3), _mm_unpacklo_epi64(t2, t3));
+        _mm256_storeu_si256(&py[i].yA, yA);
+        _mm256_storeu_si256(&py[i].yB, yB);
+        _mm256_storeu_si256(&py[i].sy, _mm256_madd_epi16(_mm256_add_epi16(_mm256_maddubs_epi16(ones8, yA), _mm256_maddubs_epi16(ones8, yB)), ones16));
+        const float d0 = GGML_CPU_FP16_TO_FP32(y0->d);
+        const float d1 = GGML_CPU_FP16_TO_FP32(y1->d);
+        _mm256_storeu_ps((float *) &py[i].dy, _mm256_setr_ps(d0, d0, d1, d1, d0, d0, d1, d1));
+    }
+}
+
+static inline __m256 q2_0_prep_acc_block_avx2(const block_q2_0 * GGML_RESTRICT x, const q2_0_prep_t * GGML_RESTRICT py, __m256 acc) {
+    const __m256i q  = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *) x->qs));
+    const __m256i m3 = _mm256_set1_epi8(3);
+    const __m256i A  = _mm256_and_si256(_mm256_srlv_epi64(q, _mm256_setr_epi64x(0, 0, 2, 2)), m3);
+    const __m256i B  = _mm256_and_si256(_mm256_srlv_epi64(q, _mm256_setr_epi64x(4, 4, 6, 6)), m3);
+    const __m256i p  = _mm256_add_epi16(_mm256_maddubs_epi16(A, _mm256_loadu_si256(&py->yA)), _mm256_maddubs_epi16(B, _mm256_loadu_si256(&py->yB)));
+    const __m256i p32 = _mm256_sub_epi32(_mm256_madd_epi16(p, _mm256_set1_epi16(1)), _mm256_loadu_si256(&py->sy));
+    const __m256 f = _mm256_mul_ps(_mm256_cvtepi32_ps(p32), _mm256_loadu_ps((const float *) &py->dy));
+#if defined(__FMA__)
+    return _mm256_fmadd_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(x->d)), f, acc);
+#else
+    return _mm256_add_ps(acc, _mm256_mul_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(x->d)), f));
+#endif
+}
+
+void ggml_vec_dot_q2_0_prep(int n, float * GGML_RESTRICT s, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vpy) {
+    const block_q2_0 * GGML_RESTRICT x = vx;
+    const q2_0_prep_t * GGML_RESTRICT py = vpy;
+    const int nb = n / QK2_0;
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 1 < nb; i += 2) {
+        // the weights are read once per token: prefetch ahead of the hardware prefetcher, which stops at short
+        // rows and page boundaries (8 threads: 34 -> 40 GB/s, the RAM limit of this machine)
+        _mm_prefetch((const char *) (x + i) + GGML_Q2_0_PREFETCH, _MM_HINT_T0);
+        acc0 = q2_0_prep_acc_block_avx2(x + i + 0, py + i + 0, acc0);
+        acc1 = q2_0_prep_acc_block_avx2(x + i + 1, py + i + 1, acc1);
+    }
+    if (i < nb) {
+        acc0 = q2_0_prep_acc_block_avx2(x + i, py + i, acc0);
+    }
+    *s = hsum_float_8(_mm256_add_ps(acc0, acc1));
+}
+#endif
+
 void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined(__AVX2__)
     assert(n % QK2_0 == 0);

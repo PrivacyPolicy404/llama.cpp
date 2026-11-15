@@ -41,6 +41,14 @@ void quantize_row_iq4_xs (const float * GGML_RESTRICT x, void * GGML_RESTRICT y,
 // Dot product
 void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
+#if defined(__AVX2__)
+// Q2_0 x Q8_0 with the activations rearranged once per column (x86 AVX2 only, see arch/x86/quants.c).
+// py holds GGML_Q2_0_PREP_BLOCK_SIZE bytes per Q2_0 block (n/64 blocks) and must be 32-byte aligned.
+#define GGML_Q2_0_PREP_BLOCK_SIZE 128
+void ggml_q2_0_prep_q8_0(int n, const void * GGML_RESTRICT vy, void * GGML_RESTRICT py);
+void ggml_vec_dot_q2_0_prep(int n, float * GGML_RESTRICT s, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT py);
+#endif
 void ggml_vec_dot_f8_e4m3_f32(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
