@@ -16,6 +16,9 @@
 >    the BF16 hyper-connection weights of a mixed-precision quant into Q8_0 (-0.55 GB of VRAM, same perplexity).
 > 4. **Vulkan `multi_add` fusion on AMD drivers without RTE fp16** (GCN/Polaris): the 9 adds that combine the 10 routed
 >    experts per layer run as fused dispatches (2980 -> 2591 dispatches per token, decode +2.5 %).
+> 5. **Faster Q2_0 x Q8_0 `mul_mat_id` on the CPU (AVX2)** for MoE experts kept in RAM: the activations are rearranged
+>    once per column to match the Q2_0 bit layout, and the weights are prefetched ahead. 8 threads: 33 -> 40 GB/s of
+>    weights (the RAM limit of an i7-10700); Qwen3.8-Flash-Next decode +12.5 %.
 >
 > The branch is rebased on upstream regularly. Everything else is unmodified upstream llama.cpp:
 > please report issues to [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), not here.
