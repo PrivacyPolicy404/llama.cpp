@@ -4797,7 +4797,12 @@ vk_device ggml_vk_get_device(size_t idx) {
 
         device->pipeline_robustness = pl_robustness_features.pipelineRobustness;
 
-        device->multi_add = vk12_props.shaderRoundingModeRTEFloat16 &&
+        // the multi_add shader is f32 only: the RTE fp16 check keeps out the drivers where it misbehaves,
+        // AMD drivers are fine without it (e.g. GCN/Polaris has no RTE fp16)
+        const bool amd_driver = device->driver_id == vk::DriverId::eMesaRadv ||
+                                device->driver_id == vk::DriverId::eAmdOpenSource ||
+                                device->driver_id == vk::DriverId::eAmdProprietary;
+        device->multi_add = (vk12_props.shaderRoundingModeRTEFloat16 || amd_driver) &&
                             device->properties.limits.maxPushConstantsSize >= sizeof(vk_op_multi_add_push_constants) &&
                             getenv("GGML_VK_DISABLE_MULTI_ADD") == nullptr;
 
