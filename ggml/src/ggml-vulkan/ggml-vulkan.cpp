@@ -4141,7 +4141,11 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     for (ggml_type k_type : lightning_indexer_k_types) {
         const std::string name = "lightning_indexer_" + std::string(ggml_type_name(k_type)) + "_k_f32";
-        ggml_vk_create_pipeline(device, device->pipeline_lightning_indexer_f32[k_type], name.c_str(), lightning_indexer_f32_len, lightning_indexer_f32_data, "main", 5, sizeof(vk_op_lightning_indexer_push_constants), {1, 1, 1}, {(uint32_t)k_type, fa_block_bytes(k_type)}, 1, true);
+        if (device->fp16) {
+            ggml_vk_create_pipeline(device, device->pipeline_lightning_indexer_f32[k_type], name.c_str(), lightning_indexer_f32_len, lightning_indexer_f32_data, "main", 5, sizeof(vk_op_lightning_indexer_push_constants), {1, 1, 1}, {(uint32_t)k_type, fa_block_bytes(k_type)}, 1, true);
+        } else {
+            ggml_vk_create_pipeline(device, device->pipeline_lightning_indexer_f32[k_type], name.c_str(), lightning_indexer_f32_fp32_len, lightning_indexer_f32_fp32_data, "main", 5, sizeof(vk_op_lightning_indexer_push_constants), {1, 1, 1}, {(uint32_t)k_type, fa_block_bytes(k_type)}, 1, true);
+        }
     }
 
     {
@@ -17218,7 +17222,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
 
                 // the q/w/m types and the shape relationships between q, k, w, m and dst
                 // are already asserted in ggml_lightning_indexer()
-                if (!ggml_vk_lightning_indexer_k_type_supported(k->type) || !device->fp16) {
+                if (!ggml_vk_lightning_indexer_k_type_supported(k->type)) {
                     return false;
                 }
 
