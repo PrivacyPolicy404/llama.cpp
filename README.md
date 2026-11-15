@@ -14,6 +14,8 @@
 >    run it on the GPU instead of falling back to the CPU (122 -> 98 graph splits per token, decode +4-5 %).
 > 3. **`llama-quantize ... COPY --tensor-type`** requantizes only the named tensors and copies the rest, e.g. to turn
 >    the BF16 hyper-connection weights of a mixed-precision quant into Q8_0 (-0.55 GB of VRAM, same perplexity).
+> 4. **Vulkan `multi_add` fusion on AMD drivers without RTE fp16** (GCN/Polaris): the 9 adds that combine the 10 routed
+>    experts per layer run as fused dispatches (2980 -> 2591 dispatches per token, decode +2.5 %).
 >
 > The branch is rebased on upstream regularly. Everything else is unmodified upstream llama.cpp:
 > please report issues to [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), not here.
