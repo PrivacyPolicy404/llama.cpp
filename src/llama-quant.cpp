@@ -3351,8 +3351,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         metadata[i].allows_quantization = tensor_allows_quantization(params, model->arch, tensor);
 
-        if (metadata[i].allows_quantization) { metadata[i].target_type = llama_tensor_get_type(qs, params, tensor, default_type, metadata[i]); }
-        else { metadata[i].target_type = tensor->type; }
+        if (metadata[i].allows_quantization) {
+            metadata[i].target_type = llama_tensor_get_type(qs, params, tensor, default_type, metadata[i]);
+        } else {
+            metadata[i].target_type = tensor->type;
+            // COPY + --tensor-type: copy everything as is, except the tensors named explicitly
+            if (params->only_copy && ggml_n_dims(tensor) >= 2) {
+                const ggml_type qtype = tensor_type_override_for(qs, tensor->name);
+                if (qtype != GGML_TYPE_COUNT) {
+                    metadata[i].target_type = tensor_type_fallback(qs, tensor, qtype);
+                }
+            }
+        }
 
         if (metadata[i].allows_quantization && unused_kv_tensors.count(metadata[i].name)) {
             metadata[i].target_type = tensor_type_fallback(qs, tensor, GGML_TYPE_Q4_0);
