@@ -1,8 +1,18 @@
 # llama.cpp
 
 > [!NOTE]
-> **This is a personal fork.** Branch `ot-host-buffers` is upstream `master` plus a few small patches,
-> made to run large MoE models (Qwen3.8-Flash-Next) on an old GPU: RX 580 8 GB (Polaris, Vulkan, PCIe 3.0) + 64 GB DDR4.
+> **This is a personal fork: the RX 580 unshittification project.** Branch `ot-host-buffers` is upstream `master`
+> plus a few patches, made to squeeze large MoE models out of an old GPU: **RX 580 8 GB** (Polaris/GCN4, Vulkan/RADV,
+> PCIe 3.0, no fp16 arithmetic, no integer dot product, no cooperative matrices) + i7-10700 + 64 GB DDR4.
+> Main target: Qwen3.8-Flash-Next (Q2_0 experts kept in RAM, dense part on the GPU, MTP speculative decoding).
+>
+> | Qwen3.8-Flash-Next on this box (llama-server) | stock config | now |
+> |---|---|---|
+> | generation | 12.8 tok/s | **17.6 tok/s** (MTP; +2-3 % more with the VRAM clock pinned) |
+> | long-prompt processing | 62 tok/s | **133 tok/s** |
+> | context that fits | 8K | 32K |
+>
+> **Patches** (each one is a separate commit on the branch):
 >
 > 1. **`-ot` / `--override-tensor` accepts pinned host buffer types** (`Vulkan_Host`, `CUDA_Host`, ...), so you can
 >    pin only part of the tensors kept in host memory. On amdgpu, pinned (GTT) memory is capped at half of the RAM
@@ -19,6 +29,22 @@
 > 5. **Faster Q2_0 x Q8_0 `mul_mat_id` on the CPU (AVX2)** for MoE experts kept in RAM: the activations are rearranged
 >    once per column to match the Q2_0 bit layout, and the weights are prefetched ahead. 8 threads: 33 -> 40 GB/s of
 >    weights (the RAM limit of an i7-10700); Qwen3.8-Flash-Next decode +12.5 %.
+>
+> **Things learned on Polaris that are not patches** (useful if you run MoE models on an old AMD card):
+>
+> - **Pin the VRAM clock.** With experts on the CPU the GPU works in bursts (it waits for the CPU at every layer) and
+>   amdgpu drops the memory clock to half (2000 -> 1000 MHz here) in the pauses. Fixing it
+>   (`echo manual > power_dpm_force_performance_level; echo 2 > pp_dpm_mclk`) gives +2-3 % with MTP.
+> - **MTP helps a MoE with CPU experts** (+30 % here, 2 draft tokens is the sweet spot; 3-4 make the CPU read the
+>   union of more experts, and that is already RAM-bound).
+> - **`parallel = 1`** in llama-server for one user: the default 4 slots halve the speed and eat pinned memory.
+> - **The Vulkan perf logger (`GGML_VK_PERF_LOGGER`) serializes every op**, so it overstates small ops (6-8 ms per
+>   token in the logger, ~1.7 ms for real). To measure what removing an op is really worth, dispatch it twice;
+>   skipping ops instead gives garbage activations and the MoE router collapses (fake speedups).
+> - **An op that gets faster in `test-backend-ops` is not a faster model**: twice a matmul improved 25-60 % in
+>   isolation and end-to-end throughput did not move. Always close with an end-to-end A/B (temperature 0, alternating).
+> - On Polaris, sub-4-bit mat-vec shaders are ALU-bound (~330-430 G weights/s whatever the bits), so requantizing
+>   Q3_K to a "faster" type does not pay off: what you win per byte you lose in bytes.
 >
 > The branch is rebased on upstream regularly. Everything else is unmodified upstream llama.cpp:
 > please report issues to [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), not here.
