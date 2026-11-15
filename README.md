@@ -8,7 +8,7 @@
 >
 > | Qwen3.8-Flash-Next on this box (llama-server) | stock config | now |
 > |---|---|---|
-> | generation | 12.8 tok/s | **17.6 tok/s** (MTP; +2-3 % more with the VRAM clock pinned) |
+> | generation | 12.8 tok/s | **18.2 tok/s** (+42 %) |
 > | long-prompt processing | 62 tok/s | **133 tok/s** |
 > | context that fits | 8K | 32K |
 >
@@ -35,6 +35,10 @@
 > - **Pin the VRAM clock.** With experts on the CPU the GPU works in bursts (it waits for the CPU at every layer) and
 >   amdgpu drops the memory clock to half (2000 -> 1000 MHz here) in the pauses. Fixing it
 >   (`echo manual > power_dpm_force_performance_level; echo 2 > pp_dpm_mclk`) gives +2-3 % with MTP.
+> - **Submit GPU work more often.** With ~53 nodes per GPU split, Vulkan only submits at 80 % of the split, so the GPU
+>   waits for the CPU to record commands. `GGML_VK_MAX_NODES_PER_SUBMIT=16`: +1.4 %.
+> - **`--spec-draft-sampling probabilistic --spec-draft-p-min 0`** when sampling with temperature: the draft samples
+>   and the target verifies by rejection (exact), acceptance 72 -> 75 % at temp 0.8, +2.3 %.
 > - **MTP helps a MoE with CPU experts** (+30 % here, 2 draft tokens is the sweet spot; 3-4 make the CPU read the
 >   union of more experts, and that is already RAM-bound).
 > - **`parallel = 1`** in llama-server for one user: the default 4 slots halve the speed and eat pinned memory.
