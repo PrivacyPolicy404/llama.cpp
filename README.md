@@ -10,7 +10,7 @@
 > |---|---|---|
 > | generation | 12.8 tok/s | **18.2 tok/s** (+42 %) |
 > | long-prompt processing | 62 tok/s | **133 tok/s** |
-> | context that fits | 8K | 32K |
+> | context that fits | 8K | **64K** (Q8_0 KV cache) |
 >
 > **Patches** (each one is a separate commit on the branch):
 >
@@ -49,6 +49,9 @@
 >   isolation and end-to-end throughput did not move. Always close with an end-to-end A/B (temperature 0, alternating).
 > - On Polaris, sub-4-bit mat-vec shaders are ALU-bound (~330-430 G weights/s whatever the bits), so requantizing
 >   Q3_K to a "faster" type does not pay off: what you win per byte you lose in bytes.
+> - **Quantize the KV cache on hybrid models.** Qwen3.8-Flash-Next has full attention in only 1 of 4 layers, so the
+>   KV cache is small and `-ctk q8_0 -ctv q8_0 -ctkd q8_0 -ctvd q8_0` takes 64K of context from 1.9 to 1.0 GiB with
+>   KLD 0.0035 (98 % same top token), for ~3 % of speed. 64K fits in 8 GB with the desktop running.
 >
 > The branch is rebased on upstream regularly. Everything else is unmodified upstream llama.cpp:
 > please report issues to [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), not here.
