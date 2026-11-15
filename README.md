@@ -1,5 +1,20 @@
 # llama.cpp
 
+> [!NOTE]
+> **This is a personal fork.** Branch `ot-host-buffers` is upstream `master` plus one small patch:
+> `-ot` / `--override-tensor` also accepts the pinned host buffer types (`Vulkan_Host`, `CUDA_Host`, ...),
+> so you can pin only part of the tensors kept in host memory.
+>
+> Why: on amdgpu, pinned (GTT) memory is capped at half of the RAM by default (31 GiB on a 64 GB machine).
+> Pinning all the experts of a large MoE either fails or loses the Vulkan device, while not pinning them makes
+> prompt processing slower. With the patch, e.g. 44 of 48 expert layers of Qwen3.8-Flash-Next fit in the cap:
+>
+> `-lm none --lazy-mode on --no-host -ot "blk\.([0-9]|[1-3][0-9]|4[0-3])\.ffn_.*_exps=Vulkan_Host,ffn_.*_exps=CPU"`
+>
+> Measured on an RX 580 (8 GB, PCIe 3.0) + 64 GB DDR4: long-prompt processing 104 -> 125 tok/s, generation unchanged.
+> The branch is rebased on upstream regularly. Everything else is unmodified upstream llama.cpp:
+> please report issues to [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), not here.
+
 ![llama.cpp](https://raw.githubusercontent.com/ggml-org/llama-brand/refs/heads/master/logo/svg/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">
