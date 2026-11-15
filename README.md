@@ -10,7 +10,7 @@
 > |---|---|---|
 > | generation | 12.8 tok/s | **18.2 tok/s** (+42 %) |
 > | long-prompt processing | 62 tok/s | **133 tok/s** |
-> | context that fits | 8K | **64K** (Q8_0 KV cache) |
+> | context that fits | 8K | **64K** (Q8_0 KV cache, desktop off) |
 >
 > **Patches** (each one is a separate commit on the branch):
 >
@@ -51,7 +51,13 @@
 >   Q3_K to a "faster" type does not pay off: what you win per byte you lose in bytes.
 > - **Quantize the KV cache on hybrid models.** Qwen3.8-Flash-Next has full attention in only 1 of 4 layers, so the
 >   KV cache is small and `-ctk q8_0 -ctv q8_0 -ctkd q8_0 -ctvd q8_0` takes 64K of context from 1.9 to 1.0 GiB with
->   KLD 0.0035 (98 % same top token), for ~3 % of speed. 64K fits in 8 GB with the desktop running.
+>   KLD 0.0035 (98 % same top token), for ~3 % of speed.
+> - **Size the MTP draft's batch separately: `--spec-draft-n-ubatch 512`.** By default the draft context reserves compute
+>   buffers for the full `-ub` (867 MiB at 2048 here); with 512, 0.42 GiB less VRAM at the same speed.
+> - **Leave ~0.3-0.4 GB of VRAM free and read per-process memory.** When llama.cpp asks for more VRAM than is free, the
+>   kernel silently places the rest in GTT, so "VRAM used" looks fine (check `drm-memory-vram`/`-gtt` in
+>   `/proc/PID/fdinfo`). And with the card at ~7.9 of 8 GB, long prompts (30K) run ~40 % slower (109 -> 64-68 tok/s);
+>   short prompts don't show it.
 >
 > The branch is rebased on upstream regularly. Everything else is unmodified upstream llama.cpp:
 > please report issues to [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), not here.
