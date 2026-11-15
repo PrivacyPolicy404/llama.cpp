@@ -1193,6 +1193,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             metadata[i].target_type = llama_tensor_get_type(qs, params, tensor, default_type, metadata[i]);
         } else {
             metadata[i].target_type = tensor->type;
+            // COPY + --tensor-type: copy everything as is, except the tensors named explicitly
+            if (params->only_copy && ggml_n_dims(tensor) >= 2) {
+                const std::string tensor_name(tensor->name);
+                for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
+                    if (std::regex_search(tensor_name, pattern)) {
+                        metadata[i].target_type = tensor_type_fallback(qs, tensor, qtype);
+                        break;
+                    }
+                }
+            }
         }
 
         metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
