@@ -42,6 +42,11 @@
 >    as eagle3 / dflash; the idea is FR-Spec's frequency-ranked drafting). The target verifies against the full
 >    vocabulary, so the output distribution is unchanged. With the 65536 most frequent of 248320 tokens: decode +2 %,
 >    same accepted drafts, -0.24 GiB of VRAM and a draft file 263 MB smaller.
+>  9. **q3_K / q5_K mat-vec shaders: scales folded into the weights once per row.** With 4 B columns those shaders
+>    needed more than 128 VGPRs (147 / 143), so GCN ran one wave per SIMD instead of two: q3_K 10240x2560 took 226 us
+>    with 3 columns and 369 with 4. Now 4 columns fit (128 / 115 VGPRs): 369 -> 265 us and 290 -> 221 us, and 1-3
+>    columns are up to 7 % faster. Decode with 2 MTP drafts +1.1 % at 12K, +0.3 % at 30K. Lesson: check
+>    `RADV_DEBUG=shaderstats` when a shader variant costs more than its work explains.
 >
 > **Things learned on Polaris that are not patches** (useful if you run MoE models on an old AMD card):
 >
