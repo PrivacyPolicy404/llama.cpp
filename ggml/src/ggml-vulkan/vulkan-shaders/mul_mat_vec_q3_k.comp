@@ -47,28 +47,32 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint ix, co
 
         const FLOAT_TYPE d = FLOAT_TYPE(data_a[ib0 + i].d);
 
-        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
-            vec2 b0 =   vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 +  0]);
-            vec2 b16 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 +  8]);
-            vec2 b32 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 16]);
-            vec2 b48 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 24]);
-            vec2 b64 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 32]);
-            vec2 b80 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 40]);
-            vec2 b96 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 48]);
-            vec2 b112 = vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 56]);
+        // fold the scales into the unpacked weights once per row: each column then only costs the dot
+        // product, and fewer values stay live (4 columns fit in 128 VGPRs, so GCN keeps 2 waves per SIMD)
+        const float sc0 = float(sccache[csel][ix][v_im][0]);
+        const float sc1 = float(sccache[csel][ix][v_im][1]);
+        const float sc2 = float(sccache[csel][ix][v_im][2]);
+        const float sc3 = float(sccache[csel][ix][v_im][3]);
+        const float sc4 = float(sccache[csel][ix][v_im][4]);
+        const float sc5 = float(sccache[csel][ix][v_im][5]);
+        const float sc6 = float(sccache[csel][ix][v_im][6]);
+        const float sc7 = float(sccache[csel][ix][v_im][7]);
+        const vec4 w0 = (qs_u32_0 - hmk_0) * vec4(sc0, sc0, sc1, sc1);
+        const vec4 w1 = (qs_u32_2 - hmk_1) * vec4(sc2, sc2, sc3, sc3);
+        const vec4 w2 = (qs_u32_4 - hmk_2) * vec4(sc4, sc4, sc5, sc5);
+        const vec4 w3 = (qs_u32_6 - hmk_3) * vec4(sc6, sc6, sc7, sc7);
 
-            FLOAT_TYPE sum = FLOAT_TYPE(0.0);
-            [[unroll]] for (int l = 0; l < 2; ++l) {
-                sum = fma(FLOAT_TYPE(  b0[l]) * sccache[csel][ix][v_im][0], qs_u32_0[l  ] - hmk_0[l  ],
-                      fma(FLOAT_TYPE( b16[l]) * sccache[csel][ix][v_im][1], qs_u32_0[l+2] - hmk_0[l+2],
-                      fma(FLOAT_TYPE( b32[l]) * sccache[csel][ix][v_im][2], qs_u32_2[l  ] - hmk_1[l  ],
-                      fma(FLOAT_TYPE( b48[l]) * sccache[csel][ix][v_im][3], qs_u32_2[l+2] - hmk_1[l+2],
-                      fma(FLOAT_TYPE( b64[l]) * sccache[csel][ix][v_im][4], qs_u32_4[l  ] - hmk_2[l  ],
-                      fma(FLOAT_TYPE( b80[l]) * sccache[csel][ix][v_im][5], qs_u32_4[l+2] - hmk_2[l+2],
-                      fma(FLOAT_TYPE( b96[l]) * sccache[csel][ix][v_im][6], qs_u32_6[l  ] - hmk_3[l  ],
-                      fma(FLOAT_TYPE(b112[l]) * sccache[csel][ix][v_im][7], qs_u32_6[l+2] - hmk_3[l+2], sum))))))));
-            }
-            temp[j][n] = fma(d, sum, temp[j][n]);
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            const uint bi = (j*p.batch_stride_b + b_offset + y_idx) / 2;
+            vec2 acc = vec2(data_b_v2[bi +  0]) * w0.xy;
+            acc = fma(vec2(data_b_v2[bi +  8]), w0.zw, acc);
+            acc = fma(vec2(data_b_v2[bi + 16]), w1.xy, acc);
+            acc = fma(vec2(data_b_v2[bi + 24]), w1.zw, acc);
+            acc = fma(vec2(data_b_v2[bi + 32]), w2.xy, acc);
+            acc = fma(vec2(data_b_v2[bi + 40]), w2.zw, acc);
+            acc = fma(vec2(data_b_v2[bi + 48]), w3.xy, acc);
+            acc = fma(vec2(data_b_v2[bi + 56]), w3.zw, acc);
+            temp[j][n] = fma(d, FLOAT_TYPE(acc.x + acc.y), temp[j][n]);
         }
     }
 }
