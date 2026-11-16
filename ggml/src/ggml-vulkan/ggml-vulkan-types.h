@@ -765,6 +765,7 @@ struct vk_device_struct {
     bool add_rms_fusion;
     uint32_t partials_binding_alignment;
     uint32_t max_nodes_per_submit;
+    uint32_t first_submit_nodes;
 
     bool shader_64b_indexing;
 
