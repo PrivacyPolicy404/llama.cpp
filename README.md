@@ -29,6 +29,14 @@
 > 5. **Faster Q2_0 x Q8_0 `mul_mat_id` on the CPU (AVX2)** for MoE experts kept in RAM: the activations are rearranged
 >    once per column to match the Q2_0 bit layout, and the weights are prefetched ahead. 8 threads: 33 -> 40 GB/s of
 >    weights (the RAM limit of an i7-10700); Qwen3.8-Flash-Next decode +12.5 %.
+> 6. **Vulkan sparse flash attention from 4x on GCN with Q8_0 K/V.** Models that attend to a selected subset of the
+>    cache (~2048 cells here) only took the sparse path when the cache was 16x the selection, a break-even measured
+>    on RDNA3/RDNA4. On Polaris dense is slower and sparse wins from 4x (3 queries over 16K cells: 1155 -> 439 us),
+>    so it now kicks in at ~8K of context instead of ~32K: with MTP, 17.1 -> 18.3 tok/s at 20K and 16.4 -> 17.4 at 30K.
+> 7. **`GGML_VK_FIRST_SUBMIT_NODES=N`**: submit the first batch of each graph after N nodes, then every
+>    `GGML_VK_MAX_NODES_PER_SUBMIT` as usual. With ~49 short GPU segments per token the GPU was idle while the first
+>    16 nodes of each one were recorded. With N=2: decode +2.9 % without MTP, +0.8-1.4 % with MTP, identical output
+>    (1, 4, 8 and doubling ramps are all worse).
 >
 > **Things learned on Polaris that are not patches** (useful if you run MoE models on an old AMD card):
 >
