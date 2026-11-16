@@ -4,13 +4,29 @@
 > **This is a personal fork: the RX 580 unshittification project.** Branch `ot-host-buffers` is upstream `master`
 > plus a few patches, made to squeeze large MoE models out of an old GPU: **RX 580 8 GB** (Polaris/GCN4, Vulkan/RADV,
 > PCIe 3.0, no fp16 arithmetic, no integer dot product, no cooperative matrices) + i7-10700 + 64 GB DDR4.
-> Main target: Qwen3.8-Flash-Next (Q2_0 experts kept in RAM, dense part on the GPU, MTP speculative decoding).
+> Main target: [Qwen3.8-Flash-Next GSQ-RCO abliterated](https://huggingface.co/SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF)
+> (125B MoE, ~6B active per token), a model about eight times larger than the card's memory.
 >
-> | Qwen3.8-Flash-Next on this box (llama-server) | stock config | now |
+> | The model as it runs here | |
+> |---|---|
+> | Main file | Q2_0 quant, 66 GB in two shards, read from NVMe |
+> | Experts | Q2_0, 31.6 GiB, kept in RAM and computed on the CPU; 44 of 48 layers pinned (patch 1) |
+> | Dense part | on the GPU (q3_K, q5_K, iq4_xs, q8_0), 4.7 GiB |
+> | Hyper-connections | BF16 requantized to Q8_0 (patch 3): -0.55 GB of VRAM, same perplexity |
+> | Speculative decoding | the repo's MTP draft block in Q4_0, 2 draft tokens, output trimmed to the 65536 most frequent tokens (patch 8) |
+> | Context | 64K, K/V cache in Q8_0, one slot |
+>
+> | llama-server on this box | stock config | now |
 > |---|---|---|
-> | generation | 12.8 tok/s | **18.2 tok/s** (+42 %) |
-> | long-prompt processing | 62 tok/s | **133 tok/s** |
-> | context that fits | 8K | **64K** (Q8_0 KV cache, desktop off) |
+> | generation, short prompt | 12.8 tok/s | **20.0 tok/s** (+56 %) |
+> | generation at 12K of context | did not fit | **19.8 tok/s** |
+> | generation at 30K of context | did not fit | **18.4 tok/s** |
+> | long-prompt processing | 62 tok/s | **134 tok/s** |
+> | context that fits | 8K | **64K** (desktop off) |
+> | VRAM in use | | 7.2 of 8 GiB |
+>
+> Generation at 12K / 30K is at temperature 0 over a saved context; the short-prompt figure is one sampled run of the
+> panel's smoke test.
 >
 > **Patches** (each one is a separate commit on the branch):
 >
@@ -42,11 +58,14 @@
 >    as eagle3 / dflash; the idea is FR-Spec's frequency-ranked drafting). The target verifies against the full
 >    vocabulary, so the output distribution is unchanged. With the 65536 most frequent of 248320 tokens: decode +2 %,
 >    same accepted drafts, -0.24 GiB of VRAM and a draft file 263 MB smaller.
->  9. **q3_K / q5_K mat-vec shaders: scales folded into the weights once per row.** With 4 B columns those shaders
+> 9. **q3_K / q5_K mat-vec shaders: scales folded into the weights once per row.** With 4 B columns those shaders
 >    needed more than 128 VGPRs (147 / 143), so GCN ran one wave per SIMD instead of two: q3_K 10240x2560 took 226 us
 >    with 3 columns and 369 with 4. Now 4 columns fit (128 / 115 VGPRs): 369 -> 265 us and 290 -> 221 us, and 1-3
 >    columns are up to 7 % faster. Decode with 2 MTP drafts +1.1 % at 12K, +0.3 % at 30K. Lesson: check
 >    `RADV_DEBUG=shaderstats` when a shader variant costs more than its work explains.
+> 10. **iq4_xs mat-vec shader: the sub-block in two halves with 2+ columns.** Same threshold as patch 9, and here
+>    it hit the everyday case: with 3 B columns (the verify batch of 2 MTP drafts) the shader needed 142 VGPRs.
+>    Now 117: 10240x2560 with 3 columns 283 -> 173 us. Decode with 2 MTP drafts +0.7 % at 12K, +2.4 % at 30K.
 >
 > **Things learned on Polaris that are not patches** (useful if you run MoE models on an old AMD card):
 >
