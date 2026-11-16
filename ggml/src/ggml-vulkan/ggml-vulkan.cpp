@@ -4533,6 +4533,14 @@ vk_device ggml_vk_get_device(size_t idx) {
             device->max_nodes_per_submit = std::max(max_nodes_per_submit, 1u);
         }
 
+        // Optionally submit the first batch of each graph after only a few nodes, so the GPU starts working
+        // while the rest is recorded. Helps graphs split into many short GPU segments (MoE experts on the CPU).
+        device->first_submit_nodes = 0;
+        const char* GGML_VK_FIRST_SUBMIT_NODES = getenv("GGML_VK_FIRST_SUBMIT_NODES");
+        if (GGML_VK_FIRST_SUBMIT_NODES != nullptr) {
+            device->first_submit_nodes = std::stoul(GGML_VK_FIRST_SUBMIT_NODES);
+        }
+
         const bool force_disable_f16 = getenv("GGML_VK_DISABLE_F16") != nullptr;
 
         device->fp16 = !force_disable_f16 && fp16_storage && fp16_compute;
@@ -15215,7 +15223,10 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         // Signal the almost_ready fence when the graph is mostly complete (< 20% remaining)
         bool almost_ready = (cgraph->n_nodes - i) < cgraph->n_nodes / 5;
-        bool submit = (submitted_nodes >= ctx->device->max_nodes_per_submit) ||
+        const uint32_t nodes_per_submit = (submit_count == 0 && ctx->device->first_submit_nodes != 0)
+            ? std::min(ctx->device->first_submit_nodes, ctx->device->max_nodes_per_submit)
+            : ctx->device->max_nodes_per_submit;
+        bool submit = (submitted_nodes >= nodes_per_submit) ||
                       (flops_per_submit != 0 && batch_flops >= flops_per_submit) ||
                       (i + ctx->num_additional_fused_ops >= last_node) ||
                       (almost_ready && !ctx->almost_ready_fence_pending);
