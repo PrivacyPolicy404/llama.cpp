@@ -37,6 +37,11 @@
 >    `GGML_VK_MAX_NODES_PER_SUBMIT` as usual. With ~49 short GPU segments per token the GPU was idle while the first
 >    16 nodes of each one were recorded. With N=2: decode +2.9 % without MTP, +0.8-1.4 % with MTP, identical output
 >    (1, 4, 8 and doubling ramps are all worse).
+> 8. **Reduced output vocabulary for the MTP draft (`d2t`).** If the draft file carries a `d2t` tensor with K token
+>    ids, `output.weight` has only those K rows and the logits are scattered to the full vocabulary (same convention
+>    as eagle3 / dflash; the idea is FR-Spec's frequency-ranked drafting). The target verifies against the full
+>    vocabulary, so the output distribution is unchanged. With the 65536 most frequent of 248320 tokens: decode +2 %,
+>    same accepted drafts, -0.24 GiB of VRAM and a draft file 263 MB smaller.
 >
 > **Things learned on Polaris that are not patches** (useful if you run MoE models on an old AMD card):
 >
