@@ -8599,7 +8599,10 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const bool kv_f16 = k_type_eff == GGML_TYPE_F16 && v_type_eff == GGML_TYPE_F16;
     // cm2 dense is fast, so it needs a larger reduction to win.
     // With quantized K/V, sparse only breaks even around 16x (measured on RDNA3/RDNA4).
-    const int64_t min_ratio = tuning_params.path == FA_COOPMAT2 ? 4 : (kv_f16 ? 2 : 16);
+    // On GCN (measured on an RX 580, Q8_0 K/V) the dense path is slower and sparse already wins at 4x.
+    const bool kv_q8  = k_type_eff == GGML_TYPE_Q8_0 && v_type_eff == GGML_TYPE_Q8_0;
+    const bool gcn_q8 = kv_q8 && ctx->device->architecture == vk_device_architecture::AMD_GCN;
+    const int64_t min_ratio = tuning_params.path == FA_COOPMAT2 ? 4 : (kv_f16 ? 2 : (gcn_q8 ? 4 : 16));
     // coopmat2 vector decode requires 8B strides.
     auto sparse_gather_aligned = [](const ggml_tensor * t) {
         return (t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_BF16) ||
