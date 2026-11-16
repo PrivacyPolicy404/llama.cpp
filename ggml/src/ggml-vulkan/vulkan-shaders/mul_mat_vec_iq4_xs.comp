@@ -55,6 +55,55 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint ib32, 
     }
 }
 
+// 2+ columns: the sub-block is done in two halves, so that only 16 values of B per column are live across the rows
+// instead of all 32. On GCN the layout above needs more than 128 VGPRs from 3 columns (142, 183 with 4), which
+// leaves one wave per SIMD instead of two; with one column it is still the faster one.
+void calc_superblock_cols(const uint a_offset, const uint b_offset, const uint ib32, const uint i, const uint num_blocks_per_row, const uint first_row, const uint num_rows) {
+    const uint y_idx = i * QUANT_K + 32 * ib32;
+    const uint ib0 = a_offset + first_row * num_blocks_per_row + i;
+
+    [[unroll]] for (uint h = 0; h < 4; h += 2) {
+        vec4 b0[NUM_COLS][2];
+        vec4 b1[NUM_COLS][2];
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            [[unroll]] for (uint l = 0; l < 2; ++l) {
+                b0[j][l] = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + h + l]);
+                b1[j][l] = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 4 + h + l]);
+            }
+        }
+
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint ibi = ib0 + n * num_blocks_per_row;
+            const float d = float(data_a[ibi].d);
+            const uint sl = (data_a[ibi].scales_l[ib32/2] >> (4 * (ib32 & 1))) & 0xF;
+            const uint sh = (data_a[ibi].scales_h >> (2 * ib32)) & 3;
+            const float dscale = d * float(int(sl | (sh << 4)) - 32);
+
+            FLOAT_TYPE sum[NUM_COLS];
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                sum[j] = FLOAT_TYPE(0);
+            }
+
+            [[unroll]] for (uint l = 0; l < 2; ++l) {
+                const uint w = data_a_packed32[ibi].qs[4 * ib32 + h + l];
+                const u8vec4 q0 = unpack8(w & 0x0F0F0F0F);
+                const u8vec4 q1 = unpack8((w >> 4) & 0x0F0F0F0F);
+                const vec4 w0 = vec4(kvalues_iq4nl[q0.x], kvalues_iq4nl[q0.y], kvalues_iq4nl[q0.z], kvalues_iq4nl[q0.w]);
+                const vec4 w1 = vec4(kvalues_iq4nl[q1.x], kvalues_iq4nl[q1.y], kvalues_iq4nl[q1.z], kvalues_iq4nl[q1.w]);
+
+                [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                    const vec4 acc = fma(b0[j][l], w0, b1[j][l] * w1);
+                    sum[j] += FLOAT_TYPE((acc.x + acc.y) + (acc.z + acc.w));
+                }
+            }
+
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                temp[j][n] = fma(dscale, sum[j], temp[j][n]);
+            }
+        }
+    }
+}
+
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     uint a_offset, b_offset, d_offset;
 
@@ -74,8 +123,13 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         }
     }
 
-    [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += blocks_per_wg)
-        calc_superblock(a_offset, b_offset, itid, i, num_blocks_per_row, first_row, num_rows);
+    if (NUM_COLS >= 2) {
+        [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += blocks_per_wg)
+            calc_superblock_cols(a_offset, b_offset, itid, i, num_blocks_per_row, first_row, num_rows);
+    } else {
+        [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += blocks_per_wg)
+            calc_superblock(a_offset, b_offset, itid, i, num_blocks_per_row, first_row, num_rows);
+    }
 
     reduce_result(temp, d_offset, first_row, num_rows, tid);
 }
