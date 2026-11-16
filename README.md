@@ -28,6 +28,9 @@
 > Generation at 12K / 30K is at temperature 0 over a saved context; the short-prompt figure is one sampled run of the
 > panel's smoke test.
 >
+> **Setup, every option explained, what each patch changes and how to reproduce the numbers:
+> [docs/rx580.md](docs/rx580.md).**
+>
 > **Patches** (each one is a separate commit on the branch):
 >
 > 1. **`-ot` / `--override-tensor` accepts pinned host buffer types** (`Vulkan_Host`, `CUDA_Host`, ...), so you can
