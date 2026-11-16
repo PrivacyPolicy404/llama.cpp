@@ -190,7 +190,15 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
     hc_head_down = create_tensor(tn(LLM_TENSOR_HC_HEAD_DOWN, "weight"), { hc_dim, hc_lr }, trunk_flags);
     hc_head_up   = create_tensor(tn(LLM_TENSOR_HC_HEAD_UP,   "weight"), { hc_lr, hc_dim }, trunk_flags);
 
-    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+    // reduced output vocab (optional, for MTP draft files): output.weight holds only the rows of the tokens in d2t
+    int64_t n_vocab_out = n_vocab;
+    if (const struct ggml_tensor * d2t_meta = ml.get_tensor_meta("d2t")) {
+        n_vocab_out = d2t_meta->ne[0];
+        d2t = create_tensor(tn(LLM_TENSOR_D2T), { n_vocab_out }, 0);
+        LLAMA_LOG_INFO("%s: output restricted to %lld of %lld tokens (d2t)\n", __func__, (long long) n_vocab_out, (long long) n_vocab);
+    }
+
+    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), { n_embd, n_vocab_out }, TENSOR_NOT_REQUIRED);
     if (output == NULL) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
     }
@@ -334,6 +342,27 @@ std::unique_ptr<llm_graph_context> llama_model_qwen4exp::build_arch_graph(const 
 }
 
 // DFlash drafters read the layer inputs as [n_embd, T] rows, so collapse the streams
+// with a reduced output vocab (d2t) the logits cover only those tokens: scatter them to the full vocabulary
+// and leave the others at -inf, like eagle3 / dflash
+static ggml_tensor * qwen4exp_d2t_scatter(ggml_context * ctx, const llama_model & model, ggml_tensor * cur) {
+    if (!model.d2t) {
+        return cur;
+    }
+
+    const int64_t n_vocab_out = cur->ne[0];
+    const int64_t n_outputs   = cur->ne[1];
+    const int64_t n_vocab     = (int64_t) model.vocab.n_tokens();
+
+    GGML_ASSERT(model.d2t->type == GGML_TYPE_I64);
+    GGML_ASSERT(model.d2t->ne[0] == n_vocab_out);
+
+    ggml_tensor * logits = ggml_fill(ctx, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_vocab, n_outputs), -INFINITY);
+    cur = ggml_set_rows(ctx, logits,
+            ggml_reshape_3d(ctx, cur,       1,           n_vocab_out, n_outputs),
+            ggml_reshape_3d(ctx, model.d2t, n_vocab_out, 1,           1));
+    return ggml_reshape_2d(ctx, cur, n_vocab, n_outputs);
+}
+
 static ggml_tensor * hc_stream_mean(ggml_context * ctx, ggml_tensor * x) {
     const int64_t n_embd = x->ne[0];
     const int64_t hc     = x->ne[1];
@@ -575,6 +604,7 @@ llama_model_qwen4exp::graph::graph(const llm_graph_params & params) :
     res->t_embd = cur;
 
     cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = qwen4exp_d2t_scatter(ctx0, model, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
@@ -666,6 +696,7 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
     res->t_embd = cur;
 
     cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = qwen4exp_d2t_scatter(ctx0, model, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
