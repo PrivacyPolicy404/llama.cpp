@@ -31,6 +31,11 @@
 > **Setup, every option explained, what each patch changes and how to reproduce the numbers:
 > [docs/rx580.md](docs/rx580.md).**
 >
+> **Day-to-day use:** [llama-panel](https://github.com/PrivacyPolicy404/llama-panel), a small web panel that starts
+> and stops the models, measures every response and holds the per-model settings. Its
+> [docs/flash-next-rx580.md](https://github.com/PrivacyPolicy404/llama-panel/blob/main/docs/flash-next-rx580.md) has
+> this configuration ready to paste, and the panel's repo has the full log of what was measured and why.
+>
 > **Patches** (each one is a separate commit on the branch):
 >
 > 1. **`-ot` / `--override-tensor` accepts pinned host buffer types** (`Vulkan_Host`, `CUDA_Host`, ...), so you can
